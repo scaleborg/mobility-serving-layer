@@ -147,8 +147,15 @@ artifacts/
 
 - This is the **P5-side contract only**. P6 will ingest these artifacts in a
   later phase.
-- The current implementation is **scaffolding** — typed models, path builders,
-  and a JSONL writer — not full runtime instrumentation.
+- **Deployment event emission is wired** — one `serving_deployment_event` is
+  emitted on startup / bundle activation via the JSONL writer.
+- **Metrics window emission remains future work** — the runtime aggregator for
+  `serving_metrics_window` is not yet implemented.
+- `BundleLineageContext` is sourced from real P4 model metadata where available
+  (`model_version`, `trained_at`). Fields not yet emitted by P4
+  (`input_dataset_name`, `input_dataset_version`) are required settings in
+  non-development environments. In development only, missing lineage fields
+  fall back to explicit dev placeholders.
 - No Prometheus, Kafka, OpenTelemetry, or vendor monitoring is used at this
   layer.
 - No drift monitoring or label/outcome tracking is in scope for this phase.

@@ -18,5 +18,20 @@ class Settings(BaseSettings):
     include_features_used: bool = False
     log_level: str = "INFO"
 
+    # Service identity (observability)
+    service_name: str = "mobility-serving-layer"
+    service_version: str = "0.1.0"
+    environment: str = "development"
+    deployment_id: str = "local"
+    instance_id: str | None = None
+
+    # P4 lineage — required in non-development environments.
+    # Set via Settings or environment configuration.
+    input_dataset_name: str = ""
+    input_dataset_version: str = ""
+
+    # Observability artifact output
+    artifact_base_dir: Path = Path(".")
+
 
 settings = Settings()

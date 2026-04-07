@@ -20,6 +20,10 @@ from app.features.loader import open_snapshot, probe_snapshot
 from app.features.validator import validate_schema
 from app.model.loader import load_model
 from app.model.metadata import load_model_metadata
+from app.observability.context import build_context_from_metadata
+from app.observability.emission import build_deployment_event
+from app.observability.paths import deployment_event_path
+from app.observability.writer import append_jsonl
 from app.schemas.errors import StartupError
 from app.schemas.feature_schema import FeatureSchema
 
@@ -79,5 +83,38 @@ def run_startup(state: AppState, settings: Settings) -> None:
         probe_snapshot(state.db_conn)
     except Exception as exc:
         raise StartupError(message=f"Feature snapshot not accessible: {exc}") from exc
+
+    # 7. Observability — emit deployment activation event
+    event = None
+    try:
+        context = build_context_from_metadata(state, settings)
+        event = build_deployment_event(
+            context,
+            activation_reason="startup",
+            traffic_status="serving",
+        )
+    except Exception:
+        logger.warning(
+            "Failed to build observability context from bundle metadata — "
+            "deployment event not emitted. Serving continues.",
+            exc_info=True,
+        )
+
+    if event is not None:
+        try:
+            path = deployment_event_path(settings.artifact_base_dir, event.event_time)
+            append_jsonl(path, event)
+            logger.info(
+                "Deployment event emitted: model=%s version=%s path=%s",
+                event.model_name,
+                event.model_version,
+                path,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to write deployment event artifact — "
+                "serving continues without event emission.",
+                exc_info=True,
+            )
 
     logger.info("Startup complete — serving layer ready.")
