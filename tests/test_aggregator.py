@@ -406,6 +406,63 @@ class TestSchemaCompliance:
 # ---------------------------------------------------------------------------
 
 
+class TestFlushCurrent:
+    """Tests for the unconditional shutdown flush."""
+
+    def test_flush_current_emits_without_crossing_minute_boundary(self):
+        agg = MetricsAggregator()
+        ctx = _make_context()
+        t = datetime(2026, 4, 7, 14, 35, 10, tzinfo=UTC)
+        agg.record_success(5.0, 0.5, now=t)
+        agg.record_success(8.0, 0.7, now=t)
+
+        # Flush within the same minute — flush_window would return []
+        same_minute = datetime(2026, 4, 7, 14, 35, 55, tzinfo=UTC)
+        assert agg.flush_window(ctx, now=same_minute) == []
+
+        # flush_current should still emit
+        windows = agg.flush_current(ctx, now=same_minute)
+        assert len(windows) == 1
+        assert windows[0].request_count == 2
+        assert windows[0].success_count == 2
+
+    def test_flush_current_clears_bucket(self):
+        agg = MetricsAggregator()
+        ctx = _make_context()
+        t = datetime(2026, 4, 7, 14, 35, 10, tzinfo=UTC)
+        agg.record_success(5.0, 0.5, now=t)
+
+        agg.flush_current(ctx, now=t)
+        # Second flush should be empty
+        assert agg.flush_current(ctx, now=t) == []
+
+    def test_flush_current_empty_aggregator(self):
+        agg = MetricsAggregator()
+        ctx = _make_context()
+        assert agg.flush_current(ctx) == []
+
+    def test_flush_current_writes_valid_jsonl(self):
+        agg = MetricsAggregator()
+        ctx = _make_context()
+        t = datetime(2026, 4, 7, 14, 35, 10, tzinfo=UTC)
+        agg.record_success(5.0, 0.5, now=t)
+        agg.record_failure(3.0, error_type="feature_lookup", now=t)
+        agg.record_rejection(2.0, now=t)
+
+        windows = agg.flush_current(ctx, now=t)
+        assert len(windows) == 1
+        record = json.loads(windows[0].model_dump_json())
+        assert record["request_count"] == 3
+        assert record["success_count"] == 1
+        assert record["failure_count"] == 1
+        assert record["rejected_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Serving hook integration (unit level)
+# ---------------------------------------------------------------------------
+
+
 class TestServingHookIntegration:
     def test_flush_writes_jsonl_artifact(self):
         """Simulate the predict handler flush path end-to-end."""

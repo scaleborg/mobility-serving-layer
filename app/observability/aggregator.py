@@ -199,8 +199,40 @@ class MetricsAggregator:
             b = self._bucket
             self._bucket = None
 
+        return [self._build_window(b, context, now)]
+
+    def flush_current(
+        self,
+        context: "BundleLineageContext",
+        now: datetime | None = None,
+    ) -> list["ServingMetricsWindow"]:
+        """Flush the current window unconditionally (for shutdown).
+
+        Unlike flush_window, this does not wait for the minute boundary.
+        Returns a list of 0 or 1 ServingMetricsWindow records.
+        """
+        now = now or datetime.now(UTC)
+        with self._lock:
+            if self._bucket is None:
+                return []
+            if self._bucket.request_count == 0:
+                self._bucket = None
+                return []
+
+            b = self._bucket
+            self._bucket = None
+
+        return [self._build_window(b, context, now)]
+
+    def _build_window(
+        self,
+        b: _WindowBucket,
+        context: "BundleLineageContext",
+        now: datetime,
+    ) -> "ServingMetricsWindow":
+        """Build a ServingMetricsWindow from a detached bucket."""
         sorted_lat = sorted(b.latencies)
-        window = build_metrics_window(
+        return build_metrics_window(
             context=context,
             window_start=b.window_start,
             window_end=b.window_end,
@@ -230,4 +262,3 @@ class MetricsAggregator:
             fallback_prediction_count=b.fallback_prediction_count,
             heartbeat_emitted_at=now,
         )
-        return [window]

@@ -29,9 +29,32 @@ async def lifespan(application: FastAPI):
     logger.info("Running startup checks...")
     run_startup(app_state, settings)
     yield
+    # Flush any in-progress metrics window before shutting down
+    _flush_remaining_metrics()
+    if app_state.upstream_conn is not None:
+        app_state.upstream_conn.close()
+        logger.info("Upstream DuckDB connection closed.")
     if app_state.db_conn is not None:
         app_state.db_conn.close()
-        logger.info("DuckDB connection closed.")
+        logger.info("DuckDB snapshot connection closed.")
+
+
+def _flush_remaining_metrics() -> None:
+    """Flush the current metrics window unconditionally at shutdown."""
+    from app.api.predict import aggregator
+    from app.observability.paths import metrics_window_path
+    from app.observability.writer import append_jsonl
+
+    ctx = app_state.lineage_context
+    if ctx is None:
+        return
+    for window in aggregator.flush_current(ctx):
+        try:
+            path = metrics_window_path(settings.artifact_base_dir, window.window_start)
+            append_jsonl(path, window)
+            logger.info("Shutdown metrics window flushed: %s", path)
+        except Exception:
+            logger.warning("Failed to write shutdown metrics window.", exc_info=True)
 
 
 app = FastAPI(
