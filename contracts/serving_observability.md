@@ -151,11 +151,11 @@ artifacts/
   emitted on startup / bundle activation via the JSONL writer.
 - **Metrics window emission remains future work** — the runtime aggregator for
   `serving_metrics_window` is not yet implemented.
-- `BundleLineageContext` is sourced from real P4 model metadata where available
-  (`model_version`, `trained_at`). Fields not yet emitted by P4
-  (`input_dataset_name`, `input_dataset_version`) are required settings in
-  non-development environments. In development only, missing lineage fields
-  fall back to explicit dev placeholders.
+- `BundleLineageContext` is sourced from `model_metadata.json` loaded at
+  startup. All dataset lineage fields (`input_dataset_name`,
+  `input_dataset_version`, `started_at`, `completed_at`) are expected to be
+  present in this file, populated by P4. Context construction fails if any
+  required field is missing — no config fallback or dev placeholders are used.
 - No Prometheus, Kafka, OpenTelemetry, or vendor monitoring is used at this
   layer.
 - No drift monitoring or label/outcome tracking is in scope for this phase.

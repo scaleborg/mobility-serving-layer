@@ -1,10 +1,10 @@
 """
-Factory for building BundleLineageContext from real P4 bundle metadata.
+Factory for building BundleLineageContext from real P4 model metadata.
 
 Maps the actual loaded AppState + Settings into a typed lineage context.
-Fields that P4 does not yet produce are sourced from required settings.
-In development environments only, missing lineage fields fall back to
-explicit dev placeholders.
+Dataset lineage fields (input_dataset_name, input_dataset_version,
+started_at, completed_at) are read from model_metadata.json, which P4
+is expected to populate with dataset lineage.
 """
 
 import logging
@@ -17,7 +17,30 @@ from app.schemas.observability import BundleLineageContext
 
 logger = logging.getLogger(__name__)
 
-_DEV_ENVIRONMENTS = frozenset({"development", "local", "dev"})
+
+def _parse_timestamp(metadata: dict, field: str) -> datetime:
+    """Extract and parse a required UTC timestamp from model metadata.
+
+    Raises ValueError if missing, unparseable, or naive.
+    """
+    raw = metadata.get(field)
+    if not raw:
+        raise ValueError(f"model_metadata is missing required field '{field}'")
+    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        raise ValueError(f"{field} must be timezone-aware, got: {raw}")
+    return dt.astimezone(UTC)
+
+
+def _require_str(metadata: dict, field: str) -> str:
+    """Extract a required non-empty string from model metadata."""
+    value = metadata.get(field)
+    if not value or not str(value).strip():
+        raise ValueError(
+            f"Cannot build lineage context: '{field}' is missing or empty "
+            f"in model metadata"
+        )
+    return str(value).strip()
 
 
 def _parse_trained_at(metadata: dict) -> datetime:
@@ -25,13 +48,7 @@ def _parse_trained_at(metadata: dict) -> datetime:
 
     Raises ValueError if missing or unparseable.
     """
-    raw = metadata.get("trained_at")
-    if not raw:
-        raise ValueError("model_metadata is missing required field 'trained_at'")
-    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    if dt.tzinfo is None:
-        raise ValueError(f"trained_at must be timezone-aware, got: {raw}")
-    return dt.astimezone(UTC)
+    return _parse_timestamp(metadata, "trained_at")
 
 
 def _derive_model_name(model_path: Path) -> str:
@@ -54,45 +71,17 @@ def _derive_bundle_id(model_path: Path) -> str:
     return str(model_path.resolve().parent)
 
 
-def _resolve_lineage_field(
-    value: str,
-    field_name: str,
-    environment: str,
-) -> str:
-    """Resolve a lineage field value.
-
-    In development environments, missing values get an explicit dev placeholder.
-    In non-development environments, missing values raise ValueError.
-    """
-    if value and value.strip():
-        return value
-
-    if environment in _DEV_ENVIRONMENTS:
-        placeholder = f"dev-placeholder-{field_name}"
-        logger.info(
-            "Lineage field '%s' not configured — using dev placeholder: %s",
-            field_name,
-            placeholder,
-        )
-        return placeholder
-
-    raise ValueError(
-        f"Required lineage field '{field_name}' is not configured "
-        f"for environment '{environment}'. Set it in Settings or .env."
-    )
-
-
 def build_context_from_metadata(
     state: AppState,
     settings: Settings,
 ) -> BundleLineageContext:
     """Build a BundleLineageContext from the active P4 inference bundle.
 
-    Uses real metadata where available (model_version, trained_at) and
-    settings-provided values for fields P4 does not yet emit.
+    All lineage fields (model_version, trained_at, input_dataset_name,
+    input_dataset_version, started_at, completed_at) are sourced from
+    model_metadata.json loaded at startup.
 
-    Raises ValueError if required metadata is missing or if required lineage
-    fields are not configured in non-development environments.
+    Raises ValueError if any required metadata field is missing.
     """
     if not state.model_metadata:
         raise ValueError("Cannot build lineage context: model_metadata is empty")
@@ -102,12 +91,10 @@ def build_context_from_metadata(
     if not model_version:
         raise ValueError("Cannot build lineage context: model_version is missing")
 
-    input_dataset_name = _resolve_lineage_field(
-        settings.input_dataset_name, "input_dataset_name", settings.environment,
-    )
-    input_dataset_version = _resolve_lineage_field(
-        settings.input_dataset_version, "input_dataset_version", settings.environment,
-    )
+    input_dataset_name = _require_str(state.model_metadata, "input_dataset_name")
+    input_dataset_version = _require_str(state.model_metadata, "input_dataset_version")
+    started_at = _parse_timestamp(state.model_metadata, "started_at")
+    completed_at = _parse_timestamp(state.model_metadata, "completed_at")
 
     return BundleLineageContext(
         service_name=settings.service_name,
@@ -122,6 +109,6 @@ def build_context_from_metadata(
         bundle_created_at=trained_at,
         input_dataset_name=input_dataset_name,
         input_dataset_version=input_dataset_version,
-        started_at=trained_at,
-        completed_at=trained_at,
+        started_at=started_at,
+        completed_at=completed_at,
     )

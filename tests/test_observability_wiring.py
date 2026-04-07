@@ -6,9 +6,8 @@ and deployment event emission on startup.
 import json
 import pickle
 import tempfile
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -21,7 +20,6 @@ from app.observability.context import (
     _derive_bundle_uri,
     _derive_model_name,
     _parse_trained_at,
-    _resolve_lineage_field,
     build_context_from_metadata,
 )
 
@@ -35,6 +33,10 @@ REAL_METADATA = {
     "trained_at": "2026-04-04T01:22:26Z",
     "target": "target_empty_next_hour",
     "model_type": "lightgbm",
+    "input_dataset_name": "rides-v3",
+    "input_dataset_version": "ds-2026-04-01",
+    "started_at": "2026-04-04T00:45:00Z",
+    "completed_at": "2026-04-04T01:22:26Z",
 }
 
 FEATURE_SCHEMA = {
@@ -76,8 +78,6 @@ def _make_settings(**overrides) -> Settings:
         environment="production",
         deployment_id="deploy-abc",
         instance_id="pod-xyz",
-        input_dataset_name="rides-v3",
-        input_dataset_version="ds-2026-04-01",
         artifact_base_dir=Path("/srv"),
     )
     defaults.update(overrides)
@@ -127,15 +127,36 @@ class TestBuildContextFromMetadata:
         assert ctx.input_dataset_name == "rides-v3"
         assert ctx.input_dataset_version == "ds-2026-04-01"
 
-    def test_trained_at_mapped_to_timestamps(self):
+    def test_dataset_lineage_from_metadata_not_settings(self):
+        """Dataset lineage fields are read from bundle metadata, not settings."""
+        state = _make_state()
+        settings = _make_settings()
+        ctx = build_context_from_metadata(state, settings)
+
+        assert ctx.input_dataset_name == "rides-v3"
+        assert ctx.input_dataset_version == "ds-2026-04-01"
+        assert ctx.started_at == datetime(2026, 4, 4, 0, 45, 0, tzinfo=UTC)
+        assert ctx.completed_at == datetime(2026, 4, 4, 1, 22, 26, tzinfo=UTC)
+
+    def test_started_at_and_completed_at_from_metadata(self):
+        """started_at and completed_at are distinct timestamps from metadata."""
+        state = _make_state()
+        settings = _make_settings()
+        ctx = build_context_from_metadata(state, settings)
+
+        expected_started = datetime(2026, 4, 4, 0, 45, 0, tzinfo=UTC)
+        expected_completed = datetime(2026, 4, 4, 1, 22, 26, tzinfo=UTC)
+        assert ctx.started_at == expected_started
+        assert ctx.completed_at == expected_completed
+        assert ctx.started_at < ctx.completed_at
+
+    def test_trained_at_mapped_to_bundle_created_at(self):
         state = _make_state()
         settings = _make_settings()
         ctx = build_context_from_metadata(state, settings)
 
         expected = datetime(2026, 4, 4, 1, 22, 26, tzinfo=UTC)
         assert ctx.bundle_created_at == expected
-        assert ctx.started_at == expected
-        assert ctx.completed_at == expected
 
     def test_bundle_uri_is_file_uri(self):
         state = _make_state()
@@ -156,6 +177,8 @@ class TestBuildContextFromMetadata:
         settings = _make_settings()
         ctx = build_context_from_metadata(state, settings)
         assert ctx.bundle_created_at.tzinfo is UTC
+        assert ctx.started_at.tzinfo is UTC
+        assert ctx.completed_at.tzinfo is UTC
 
 
 # ---------------------------------------------------------------------------
@@ -194,55 +217,52 @@ class TestBuildContextFailures:
         with pytest.raises(ValueError, match="timezone-aware"):
             build_context_from_metadata(state, settings)
 
-
-# ---------------------------------------------------------------------------
-# Lineage field resolution
-# ---------------------------------------------------------------------------
-
-
-class TestLineageFieldResolution:
-    def test_configured_value_returned_as_is(self):
-        assert _resolve_lineage_field("rides-v3", "input_dataset_name", "production") == "rides-v3"
-
-    def test_missing_in_production_raises(self):
-        with pytest.raises(ValueError, match="Required lineage field.*input_dataset_name"):
-            _resolve_lineage_field("", "input_dataset_name", "production")
-
-    def test_missing_in_staging_raises(self):
-        with pytest.raises(ValueError, match="Required lineage field"):
-            _resolve_lineage_field("", "input_dataset_name", "staging")
-
-    def test_missing_in_development_uses_placeholder(self):
-        result = _resolve_lineage_field("", "input_dataset_name", "development")
-        assert result == "dev-placeholder-input_dataset_name"
-
-    def test_missing_in_local_uses_placeholder(self):
-        result = _resolve_lineage_field("", "input_dataset_name", "local")
-        assert result == "dev-placeholder-input_dataset_name"
-
-    def test_whitespace_only_treated_as_missing(self):
-        with pytest.raises(ValueError, match="Required lineage field"):
-            _resolve_lineage_field("   ", "input_dataset_name", "production")
-
-    def test_dev_context_builds_with_empty_lineage(self):
-        state = _make_state()
-        settings = _make_settings(
-            environment="development",
-            input_dataset_name="",
-            input_dataset_version="",
-        )
-        ctx = build_context_from_metadata(state, settings)
-        assert ctx.input_dataset_name == "dev-placeholder-input_dataset_name"
-        assert ctx.input_dataset_version == "dev-placeholder-input_dataset_version"
-
-    def test_production_context_fails_with_empty_lineage(self):
-        state = _make_state()
-        settings = _make_settings(
-            environment="production",
-            input_dataset_name="",
-            input_dataset_version="ds-v1",
-        )
+    def test_missing_input_dataset_name_raises(self):
+        meta = REAL_METADATA.copy()
+        del meta["input_dataset_name"]
+        state = _make_state(model_metadata=meta)
+        settings = _make_settings()
         with pytest.raises(ValueError, match="input_dataset_name"):
+            build_context_from_metadata(state, settings)
+
+    def test_missing_input_dataset_version_raises(self):
+        meta = REAL_METADATA.copy()
+        del meta["input_dataset_version"]
+        state = _make_state(model_metadata=meta)
+        settings = _make_settings()
+        with pytest.raises(ValueError, match="input_dataset_version"):
+            build_context_from_metadata(state, settings)
+
+    def test_missing_started_at_raises(self):
+        meta = REAL_METADATA.copy()
+        del meta["started_at"]
+        state = _make_state(model_metadata=meta)
+        settings = _make_settings()
+        with pytest.raises(ValueError, match="started_at"):
+            build_context_from_metadata(state, settings)
+
+    def test_missing_completed_at_raises(self):
+        meta = REAL_METADATA.copy()
+        del meta["completed_at"]
+        state = _make_state(model_metadata=meta)
+        settings = _make_settings()
+        with pytest.raises(ValueError, match="completed_at"):
+            build_context_from_metadata(state, settings)
+
+    def test_empty_input_dataset_name_raises(self):
+        meta = REAL_METADATA.copy()
+        meta["input_dataset_name"] = ""
+        state = _make_state(model_metadata=meta)
+        settings = _make_settings()
+        with pytest.raises(ValueError, match="input_dataset_name"):
+            build_context_from_metadata(state, settings)
+
+    def test_whitespace_input_dataset_version_raises(self):
+        meta = REAL_METADATA.copy()
+        meta["input_dataset_version"] = "   "
+        state = _make_state(model_metadata=meta)
+        settings = _make_settings()
+        with pytest.raises(ValueError, match="input_dataset_version"):
             build_context_from_metadata(state, settings)
 
 
@@ -404,8 +424,6 @@ class TestRunStartupEmission:
                 service_version="0.1.0",
                 environment="production",
                 deployment_id="test-deploy-001",
-                input_dataset_name="rides-dataset",
-                input_dataset_version="ds-v3",
                 artifact_base_dir=tmp_path,
             )
 
@@ -431,8 +449,8 @@ class TestRunStartupEmission:
             assert record["deployment_id"] == "test-deploy-001"
             assert record["activation_reason"] == "startup"
             assert record["traffic_status"] == "serving"
-            assert record["input_dataset_name"] == "rides-dataset"
-            assert record["input_dataset_version"] == "ds-v3"
+            assert record["input_dataset_name"] == "rides-v3"
+            assert record["input_dataset_version"] == "ds-2026-04-01"
             assert record["bundle_created_at"].endswith("+00:00") or \
                 record["bundle_created_at"].endswith("Z")
 

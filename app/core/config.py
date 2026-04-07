@@ -25,11 +25,6 @@ class Settings(BaseSettings):
     deployment_id: str = "local"
     instance_id: str | None = None
 
-    # P4 lineage — required in non-development environments.
-    # Set via Settings or environment configuration.
-    input_dataset_name: str = ""
-    input_dataset_version: str = ""
-
     # Observability artifact output
     artifact_base_dir: Path = Path(".")
 
