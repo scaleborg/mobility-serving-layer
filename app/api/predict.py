@@ -40,6 +40,10 @@ def _flush_and_write() -> None:
 
 @router.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest) -> PredictResponse:
+    # Flush completed windows before recording, so _get_bucket rotation
+    # does not silently discard a filled window.
+    _flush_and_write()
+
     t0 = time.perf_counter()
     try:
         result = predict_for_entity(
@@ -50,28 +54,23 @@ def predict(request: PredictRequest) -> PredictResponse:
     except FeatureParityError:
         latency_ms = (time.perf_counter() - t0) * 1000.0
         aggregator.record_rejection(latency_ms)
-        _flush_and_write()
         raise
     except EntityNotFoundError:
         latency_ms = (time.perf_counter() - t0) * 1000.0
         aggregator.record_failure(latency_ms, error_type="feature_lookup")
-        _flush_and_write()
         raise
     except ModelNotReadyError:
         latency_ms = (time.perf_counter() - t0) * 1000.0
         aggregator.record_failure(latency_ms, error_type="model_load")
-        _flush_and_write()
         raise
     except Exception:
         latency_ms = (time.perf_counter() - t0) * 1000.0
         aggregator.record_failure(latency_ms, error_type="internal")
-        _flush_and_write()
         raise
 
     latency_ms = (time.perf_counter() - t0) * 1000.0
     prediction = result["prediction"]
     aggregator.record_success(latency_ms, prediction)
-    _flush_and_write()
 
     if settings.include_features_used:
         result["features_used"] = app_state.expected_features
