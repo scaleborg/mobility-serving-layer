@@ -20,8 +20,9 @@ downstream. This document is the single source of truth for both schemas.
    records are appended.
 2. **Immutable once written** — a record that has been flushed to disk must not
    be modified.
-3. **UTC ISO-8601 timestamps** — all timestamp fields use the format
-   `YYYY-MM-DDTHH:MM:SSZ` (or with fractional seconds).
+3. **UTC ISO-8601 timestamps** — all timestamp fields use UTC in ISO-8601
+   format. Both `Z` and `+00:00` suffixes are valid (e.g.
+   `2026-04-07T14:35:22Z` or `2026-04-07T14:35:22+00:00`).
 4. **Backward-compatible evolution only** — new fields may be added as optional;
    existing required fields must not be removed or have their type changed.
 
@@ -136,6 +137,9 @@ artifacts/
 - Date/hour/minute segments are derived from the event or window timestamp in UTC.
 - One JSON object per line (JSONL).
 - Files are append-only; never overwritten.
+- **Window alignment:** exact 60-second minute-aligned windows are not enforced
+  at the schema level. Enforcement of window duration and alignment is deferred
+  to the future runtime aggregator in P5.
 
 ---
 

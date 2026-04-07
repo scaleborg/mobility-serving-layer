@@ -6,7 +6,7 @@ Covers schema validation, path generation, JSONL writer, and emission helpers.
 
 import json
 import tempfile
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,7 @@ from app.schemas.observability import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
-NOW = datetime(2026, 4, 7, 14, 35, 22)
+NOW = datetime(2026, 4, 7, 14, 35, 22, tzinfo=UTC)
 LATER = NOW + timedelta(minutes=5)
 
 
@@ -112,6 +112,12 @@ class TestSchemaValidationSuccess:
         assert ctx.service_name == "mobility-serving-layer"
         assert ctx.environment == "development"
 
+    def test_non_utc_aware_datetime_normalized_to_utc(self):
+        eastern = timezone(timedelta(hours=-5))
+        t = datetime(2026, 4, 7, 9, 35, 22, tzinfo=eastern)  # same instant as NOW
+        ctx = _make_context(bundle_created_at=t, started_at=t, completed_at=t)
+        assert ctx.bundle_created_at.tzinfo is UTC
+
 
 # ---------------------------------------------------------------------------
 # Schema validation — failure
@@ -179,6 +185,155 @@ class TestSchemaValidationFailure:
         with pytest.raises(ValidationError, match="endpoint_name"):
             build_metrics_window(ctx, **_metrics_kwargs(endpoint_name=""))
 
+    def test_naive_datetime_rejected_in_context(self):
+        naive = datetime(2026, 4, 7, 14, 0, 0)
+        with pytest.raises(ValidationError, match="timezone-aware"):
+            _make_context(bundle_created_at=naive)
+
+    def test_naive_datetime_rejected_in_deployment_event(self):
+        with pytest.raises(ValidationError, match="timezone-aware"):
+            ServingDeploymentEvent(
+                event_time=datetime(2026, 4, 7, 14, 0, 0),  # naive
+                service_name="svc",
+                service_version="v1",
+                environment="prod",
+                deployment_id="d1",
+                model_name="m",
+                model_version="v1",
+                bundle_id="b1",
+                bundle_uri="s3://x",
+                bundle_created_at=NOW,
+                input_dataset_name="ds",
+                input_dataset_version="v1",
+                started_at=NOW,
+                completed_at=NOW,
+                activation_reason="startup",
+                traffic_status="serving",
+            )
+
+    def test_naive_datetime_rejected_in_metrics_window(self):
+        ctx = _make_context()
+        naive = datetime(2026, 4, 7, 14, 0, 0)
+        with pytest.raises(ValidationError, match="timezone-aware"):
+            build_metrics_window(ctx, **_metrics_kwargs(window_start=naive))
+
+    def test_invalid_event_type_rejected(self):
+        with pytest.raises(ValidationError):
+            ServingDeploymentEvent(
+                event_type="wrong_value",
+                event_time=NOW,
+                service_name="svc",
+                service_version="v1",
+                environment="prod",
+                deployment_id="d1",
+                model_name="m",
+                model_version="v1",
+                bundle_id="b1",
+                bundle_uri="s3://x",
+                bundle_created_at=NOW,
+                input_dataset_name="ds",
+                input_dataset_version="v1",
+                started_at=NOW,
+                completed_at=NOW,
+                activation_reason="startup",
+                traffic_status="serving",
+            )
+
+    def test_invalid_schema_version_rejected_deployment(self):
+        with pytest.raises(ValidationError):
+            ServingDeploymentEvent(
+                event_time=NOW,
+                service_name="svc",
+                service_version="v1",
+                environment="prod",
+                deployment_id="d1",
+                model_name="m",
+                model_version="v1",
+                bundle_id="b1",
+                bundle_uri="s3://x",
+                bundle_created_at=NOW,
+                input_dataset_name="ds",
+                input_dataset_version="v1",
+                started_at=NOW,
+                completed_at=NOW,
+                activation_reason="startup",
+                traffic_status="serving",
+                schema_version="v2",
+            )
+
+    def test_invalid_schema_version_rejected_metrics(self):
+        ctx = _make_context()
+        with pytest.raises(ValidationError):
+            build_metrics_window(ctx, **_metrics_kwargs())
+            # build via direct construction to override schema_version
+            ServingMetricsWindow(
+                schema_version="v2",
+                window_start=NOW,
+                window_end=LATER,
+                service_name="svc",
+                service_version="v1",
+                environment="prod",
+                deployment_id="d1",
+                model_name="m",
+                model_version="v1",
+                bundle_id="b1",
+                input_dataset_name="ds",
+                input_dataset_version="v1",
+                endpoint_name="/predict",
+                request_count=0,
+                success_count=0,
+                failure_count=0,
+                rejected_count=0,
+                timeout_count=0,
+                latency_p50_ms=0.0,
+                latency_p95_ms=0.0,
+                latency_p99_ms=0.0,
+                validation_error_count=0,
+                feature_lookup_error_count=0,
+                model_load_error_count=0,
+                inference_runtime_error_count=0,
+                dependency_error_count=0,
+                internal_error_count=0,
+                input_schema_failure_count=0,
+                missing_required_field_count=0,
+                invalid_type_count=0,
+                domain_violation_count=0,
+                prediction_count=0,
+                prediction_null_count=0,
+                prediction_non_finite_count=0,
+                prediction_out_of_range_count=0,
+                fallback_prediction_count=0,
+                heartbeat_emitted_at=LATER,
+            )
+
+    def test_completed_before_started_rejected_context(self):
+        with pytest.raises(ValidationError, match="completed_at"):
+            _make_context(
+                started_at=NOW,
+                completed_at=NOW - timedelta(hours=1),
+            )
+
+    def test_completed_before_started_rejected_event(self):
+        with pytest.raises(ValidationError, match="completed_at"):
+            ServingDeploymentEvent(
+                event_time=NOW,
+                service_name="svc",
+                service_version="v1",
+                environment="prod",
+                deployment_id="d1",
+                model_name="m",
+                model_version="v1",
+                bundle_id="b1",
+                bundle_uri="s3://x",
+                bundle_created_at=NOW,
+                input_dataset_name="ds",
+                input_dataset_version="v1",
+                started_at=NOW,
+                completed_at=NOW - timedelta(hours=1),
+                activation_reason="startup",
+                traffic_status="serving",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Path generation
@@ -188,28 +343,58 @@ class TestSchemaValidationFailure:
 class TestPathGeneration:
     def test_deployment_event_path_deterministic(self):
         base = Path("/artifacts")
-        t = datetime(2026, 4, 7, 14, 35, 22)
+        t = datetime(2026, 4, 7, 14, 35, 22, tzinfo=UTC)
         result = deployment_event_path(base, t)
         assert result == base / "artifacts/serving/events/2026-04-07/deployment_events.jsonl"
 
     def test_deployment_event_path_date_changes(self):
         base = Path("/out")
-        t1 = datetime(2026, 1, 1)
-        t2 = datetime(2026, 12, 31)
+        t1 = datetime(2026, 1, 1, tzinfo=UTC)
+        t2 = datetime(2026, 12, 31, tzinfo=UTC)
         assert deployment_event_path(base, t1) != deployment_event_path(base, t2)
 
     def test_metrics_window_path_deterministic(self):
         base = Path("/artifacts")
-        t = datetime(2026, 4, 7, 14, 35, 22)
+        t = datetime(2026, 4, 7, 14, 35, 22, tzinfo=UTC)
         result = metrics_window_path(base, t)
         assert result == base / "artifacts/serving/metrics/2026-04-07/14/metrics_35.jsonl"
 
     def test_metrics_window_path_hour_minute(self):
         base = Path("/out")
-        t = datetime(2026, 6, 15, 3, 7, 0)
+        t = datetime(2026, 6, 15, 3, 7, 0, tzinfo=UTC)
         result = metrics_window_path(base, t)
         assert "03" in str(result)
         assert "metrics_07.jsonl" in str(result)
+
+    def test_naive_datetime_rejected_deployment_path(self):
+        base = Path("/out")
+        naive = datetime(2026, 4, 7, 14, 0, 0)
+        with pytest.raises(ValueError, match="timezone-aware"):
+            deployment_event_path(base, naive)
+
+    def test_naive_datetime_rejected_metrics_path(self):
+        base = Path("/out")
+        naive = datetime(2026, 4, 7, 14, 0, 0)
+        with pytest.raises(ValueError, match="timezone-aware"):
+            metrics_window_path(base, naive)
+
+    def test_non_utc_normalized_deployment_path(self):
+        base = Path("/out")
+        # UTC+5 at 2026-04-08 02:00 == UTC 2026-04-07 21:00
+        utc_plus_5 = timezone(timedelta(hours=5))
+        t = datetime(2026, 4, 8, 2, 0, 0, tzinfo=utc_plus_5)
+        result = deployment_event_path(base, t)
+        assert "2026-04-07" in str(result)
+
+    def test_non_utc_normalized_metrics_path(self):
+        base = Path("/out")
+        # UTC+5 at 2026-04-08 02:30 == UTC 2026-04-07 21:30
+        utc_plus_5 = timezone(timedelta(hours=5))
+        t = datetime(2026, 4, 8, 2, 30, 0, tzinfo=utc_plus_5)
+        result = metrics_window_path(base, t)
+        assert "2026-04-07" in str(result)
+        assert "/21/" in str(result)
+        assert "metrics_30.jsonl" in str(result)
 
 
 # ---------------------------------------------------------------------------
@@ -219,28 +404,39 @@ class TestPathGeneration:
 
 class TestJsonlWriter:
     def test_append_creates_file_and_dirs(self):
+        ctx = _make_context()
+        event = build_deployment_event(ctx, "startup", "serving", event_time=NOW)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sub" / "dir" / "out.jsonl"
-            append_jsonl(path, {"key": "value"})
+            append_jsonl(path, event)
             assert path.exists()
             lines = path.read_text().strip().split("\n")
             assert len(lines) == 1
-            assert json.loads(lines[0]) == {"key": "value"}
+            parsed = json.loads(lines[0])
+            assert parsed["event_type"] == "serving_deployment_activated"
 
     def test_append_preserves_existing(self):
+        ctx = _make_context()
+        e1 = build_deployment_event(ctx, "startup", "serving", event_time=NOW)
+        e2 = build_deployment_event(ctx, "rollback", "draining", event_time=LATER)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "out.jsonl"
-            append_jsonl(path, {"a": 1})
-            append_jsonl(path, {"b": 2})
+            append_jsonl(path, e1)
+            append_jsonl(path, e2)
             lines = path.read_text().strip().split("\n")
             assert len(lines) == 2
-            assert json.loads(lines[0]) == {"a": 1}
-            assert json.loads(lines[1]) == {"b": 2}
+            assert json.loads(lines[0])["activation_reason"] == "startup"
+            assert json.loads(lines[1])["activation_reason"] == "rollback"
 
     def test_append_batch(self):
+        ctx = _make_context()
+        events = [
+            build_deployment_event(ctx, f"reason-{i}", "serving", event_time=NOW)
+            for i in range(3)
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "out.jsonl"
-            append_jsonl_batch(path, [{"x": 1}, {"x": 2}, {"x": 3}])
+            append_jsonl_batch(path, events)
             lines = path.read_text().strip().split("\n")
             assert len(lines) == 3
 
@@ -250,13 +446,25 @@ class TestJsonlWriter:
             append_jsonl_batch(path, [])
             assert not path.exists()
 
-    def test_each_line_is_valid_json(self):
+    def test_timestamps_are_iso8601_utc(self):
+        ctx = _make_context()
+        event = build_deployment_event(ctx, "startup", "serving", event_time=NOW)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "out.jsonl"
-            append_jsonl(path, {"ts": datetime(2026, 1, 1)})
+            append_jsonl(path, event)
             line = path.read_text().strip()
             parsed = json.loads(line)
-            assert "ts" in parsed
+            assert parsed["event_time"].endswith("+00:00") or parsed["event_time"].endswith("Z")
+
+    def test_each_line_is_valid_json(self):
+        ctx = _make_context()
+        event = build_deployment_event(ctx, "startup", "serving", event_time=NOW)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.jsonl"
+            append_jsonl(path, event)
+            line = path.read_text().strip()
+            parsed = json.loads(line)
+            assert "event_type" in parsed
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +487,7 @@ class TestEmissionHelpers:
         ctx = _make_context()
         event = build_deployment_event(ctx, "rollback", "draining")
         assert event.event_time is not None
+        assert event.event_time.tzinfo is not None
 
     def test_build_metrics_window_from_context(self):
         ctx = _make_context()

@@ -8,26 +8,21 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+
+def _require_utc(v: datetime, field_name: str) -> datetime:
+    """Reject naive datetimes; normalize aware datetimes to UTC."""
+    if v.tzinfo is None:
+        raise ValueError(f"{field_name} must be timezone-aware (got naive datetime)")
+    return v.astimezone(UTC)
 
 
 def _non_empty(v: str, field_name: str) -> str:
     if not v or not v.strip():
         raise ValueError(f"{field_name} must not be empty")
-    return v
-
-
-def _non_negative_int(v: int, field_name: str) -> int:
-    if v < 0:
-        raise ValueError(f"{field_name} must be >= 0, got {v}")
-    return v
-
-
-def _non_negative_float(v: float, field_name: str) -> float:
-    if v < 0.0:
-        raise ValueError(f"{field_name} must be >= 0.0, got {v}")
     return v
 
 
@@ -56,7 +51,7 @@ class BundleLineageContext(BaseModel):
 
     @model_validator(mode="after")
     def _validate_non_empty_strings(self) -> "BundleLineageContext":
-        for field_name in (
+        for name in (
             "service_name",
             "service_version",
             "environment",
@@ -68,7 +63,21 @@ class BundleLineageContext(BaseModel):
             "input_dataset_name",
             "input_dataset_version",
         ):
-            _non_empty(getattr(self, field_name), field_name)
+            _non_empty(getattr(self, name), name)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_utc_timestamps(self) -> "BundleLineageContext":
+        for name in ("bundle_created_at", "started_at", "completed_at"):
+            setattr(self, name, _require_utc(getattr(self, name), name))
+        return self
+
+    @model_validator(mode="after")
+    def _validate_chronology(self) -> "BundleLineageContext":
+        if self.completed_at < self.started_at:
+            raise ValueError(
+                f"completed_at ({self.completed_at}) must be >= started_at ({self.started_at})"
+            )
         return self
 
     @classmethod
@@ -104,7 +113,7 @@ class BundleLineageContext(BaseModel):
 class ServingDeploymentEvent(BaseModel):
     """A single deployment activation event emitted by P5."""
 
-    event_type: str = Field(default="serving_deployment_activated")
+    event_type: Literal["serving_deployment_activated"] = "serving_deployment_activated"
     event_time: datetime
     service_name: str
     service_version: str
@@ -122,12 +131,11 @@ class ServingDeploymentEvent(BaseModel):
     completed_at: datetime
     activation_reason: str
     traffic_status: str
-    schema_version: str = Field(default="v1")
+    schema_version: Literal["v1"] = "v1"
 
     @model_validator(mode="after")
     def _validate_non_empty_strings(self) -> "ServingDeploymentEvent":
-        for field_name in (
-            "event_type",
+        for name in (
             "service_name",
             "service_version",
             "environment",
@@ -140,16 +148,29 @@ class ServingDeploymentEvent(BaseModel):
             "input_dataset_version",
             "activation_reason",
             "traffic_status",
-            "schema_version",
         ):
-            _non_empty(getattr(self, field_name), field_name)
+            _non_empty(getattr(self, name), name)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_utc_timestamps(self) -> "ServingDeploymentEvent":
+        for name in ("event_time", "bundle_created_at", "started_at", "completed_at"):
+            setattr(self, name, _require_utc(getattr(self, name), name))
+        return self
+
+    @model_validator(mode="after")
+    def _validate_chronology(self) -> "ServingDeploymentEvent":
+        if self.completed_at < self.started_at:
+            raise ValueError(
+                f"completed_at ({self.completed_at}) must be >= started_at ({self.started_at})"
+            )
         return self
 
 
 class ServingMetricsWindow(BaseModel):
     """Aggregated serving metrics for a fixed time window."""
 
-    schema_version: str = Field(default="v1")
+    schema_version: Literal["v1"] = "v1"
     window_start: datetime
     window_end: datetime
     service_name: str
@@ -208,6 +229,12 @@ class ServingMetricsWindow(BaseModel):
     heartbeat_emitted_at: datetime
 
     @model_validator(mode="after")
+    def _validate_utc_timestamps(self) -> "ServingMetricsWindow":
+        for name in ("window_start", "window_end", "heartbeat_emitted_at"):
+            setattr(self, name, _require_utc(getattr(self, name), name))
+        return self
+
+    @model_validator(mode="after")
     def _validate_window_order(self) -> "ServingMetricsWindow":
         if self.window_end <= self.window_start:
             raise ValueError(
@@ -217,8 +244,7 @@ class ServingMetricsWindow(BaseModel):
 
     @model_validator(mode="after")
     def _validate_non_empty_strings(self) -> "ServingMetricsWindow":
-        for field_name in (
-            "schema_version",
+        for name in (
             "service_name",
             "service_version",
             "environment",
@@ -230,5 +256,5 @@ class ServingMetricsWindow(BaseModel):
             "input_dataset_version",
             "endpoint_name",
         ):
-            _non_empty(getattr(self, field_name), field_name)
+            _non_empty(getattr(self, name), name)
         return self
