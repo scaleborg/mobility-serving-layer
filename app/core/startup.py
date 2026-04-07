@@ -17,6 +17,7 @@ from pathlib import Path
 from app.core.config import Settings
 from app.core.state import AppState
 from app.features.loader import open_snapshot, probe_snapshot
+from app.features.reconstructor import open_upstream_db, probe_upstream_db
 from app.features.validator import validate_schema
 from app.model.loader import load_model
 from app.model.metadata import load_model_metadata
@@ -84,7 +85,16 @@ def run_startup(state: AppState, settings: Settings) -> None:
     except Exception as exc:
         raise StartupError(message=f"Feature snapshot not accessible: {exc}") from exc
 
-    # 7. Observability — emit deployment activation event
+    # 7. Upstream raw metrics DB (for point-in-time feature reconstruction)
+    try:
+        state.upstream_conn = open_upstream_db(settings.upstream_db_path)
+        probe_upstream_db(state.upstream_conn)
+    except Exception as exc:
+        raise StartupError(
+            message=f"Upstream raw metrics DB not accessible: {exc}"
+        ) from exc
+
+    # 8. Observability — emit deployment activation event
     event = None
     try:
         context = build_context_from_metadata(state, settings)

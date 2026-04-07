@@ -21,6 +21,7 @@ class AppState:
     target: str = "unknown"
     model_metadata: dict = field(default_factory=dict)
     db_conn: duckdb.DuckDBPyConnection | None = None
+    upstream_conn: duckdb.DuckDBPyConnection | None = None
     lineage_context: BundleLineageContext | None = None
 
     @property

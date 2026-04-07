@@ -11,8 +11,11 @@ class Settings(BaseSettings):
     feature_schema_path: Path = Path("models/mobility/v1/feature_schema.json")
     model_metadata_path: Path = Path("models/mobility/v1/model_metadata.json")
 
-    # Feature store (P3 output)
+    # Feature store (P3 output — retained for fallback/health checks)
     feature_snapshot_path: Path = Path("data/online_features.parquet")
+
+    # Upstream raw metrics DB (same source P2 trains from)
+    upstream_db_path: Path = Path("../urban-mobility-control-tower/analytics/data/mobility.duckdb")
 
     # Behaviour
     include_features_used: bool = False

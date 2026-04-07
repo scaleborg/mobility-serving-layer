@@ -45,3 +45,4 @@ Thumbs.db
 # Runtime artifacts (P3/P4 outputs — not committed)
 data/
 models/
+artifacts/
