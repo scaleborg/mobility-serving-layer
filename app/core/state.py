@@ -7,6 +7,7 @@ import duckdb
 
 if TYPE_CHECKING:
     from app.schemas.feature_schema import FeatureEntry
+    from app.schemas.observability import BundleLineageContext
 
 
 @dataclass
@@ -20,6 +21,7 @@ class AppState:
     target: str = "unknown"
     model_metadata: dict = field(default_factory=dict)
     db_conn: duckdb.DuckDBPyConnection | None = None
+    lineage_context: BundleLineageContext | None = None
 
     @property
     def model_loaded(self) -> bool:

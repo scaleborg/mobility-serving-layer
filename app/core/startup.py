@@ -88,6 +88,7 @@ def run_startup(state: AppState, settings: Settings) -> None:
     event = None
     try:
         context = build_context_from_metadata(state, settings)
+        state.lineage_context = context
         event = build_deployment_event(
             context,
             activation_reason="startup",

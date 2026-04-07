@@ -147,10 +147,16 @@ artifacts/
 
 - This is the **P5-side contract only**. P6 will ingest these artifacts in a
   later phase.
-- **Deployment event emission is wired** — one `serving_deployment_event` is
+- **Deployment event emission is live** — one `serving_deployment_event` is
   emitted on startup / bundle activation via the JSONL writer.
-- **Metrics window emission remains future work** — the runtime aggregator for
-  `serving_metrics_window` is not yet implemented.
+- **Metrics window emission is live** — an in-process aggregator groups
+  serving request metrics into 60-second UTC minute-aligned windows. Flushing
+  is request-driven, not timer-driven: a completed window is persisted on the
+  next request after the minute boundary. Zero-traffic windows are
+  intentionally omitted — if no requests arrive during a minute, no record is
+  emitted for that window.
+- **P6 ingestion remains downstream work** — P6 will consume these artifacts
+  in a later phase.
 - `BundleLineageContext` is sourced from `model_metadata.json` loaded at
   startup. All dataset lineage fields (`input_dataset_name`,
   `input_dataset_version`, `started_at`, `completed_at`) are expected to be
